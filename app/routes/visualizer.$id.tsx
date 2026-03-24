@@ -1,4 +1,4 @@
-import { useNavigate, useOutletContext, useParams} from "react-router";
+import { useLocation, useNavigate, useOutletContext, useParams} from "react-router";
 import {useEffect, useRef, useState} from "react";
 import {generate3DView} from "../../lib/ai.action";
 import {Box, Download, RefreshCcw, Share2, X} from "lucide-react";
@@ -9,7 +9,12 @@ import {ReactCompareSlider, ReactCompareSliderImage} from "react-compare-slider"
 const VisualizerId = () => {
     const { id } = useParams();
     const navigate = useNavigate();
+    const location = useLocation();
     const { userId } = useOutletContext<AuthContext>()
+
+    // Image passed via navigation state when coming from upload
+    const stateImage: string | null = location.state?.initialImage ?? null;
+    const stateName: string | null = location.state?.name ?? null;
 
     const hasInitialGenerated = useRef(false);
 
@@ -79,8 +84,23 @@ const VisualizerId = () => {
 
             if (!isMounted) return;
 
-            setProject(fetchedProject);
-            setCurrentImage(fetchedProject?.renderedImage || null);
+            if (fetchedProject) {
+                setProject(fetchedProject);
+                setCurrentImage(fetchedProject.renderedImage || null);
+            } else if (stateImage) {
+                // Worker fetch failed — fall back to image from navigation state
+                console.warn('getProjectById returned null, falling back to navigation state image');
+                const fallbackProject: DesignItem = {
+                    id: id!,
+                    name: stateName || `Residence ${id}`,
+                    sourceImage: stateImage,
+                    renderedImage: undefined,
+                    timestamp: Date.now(),
+                };
+                setProject(fallbackProject);
+                setCurrentImage(null);
+            }
+
             setIsProjectLoading(false);
             hasInitialGenerated.current = false;
         };
@@ -190,7 +210,7 @@ const VisualizerId = () => {
                                     <ReactCompareSliderImage src={project?.sourceImage} alt="before" className="compare-img" />
                                 }
                                 itemTwo={
-                                    <ReactCompareSliderImage src={currentImage || project?.renderedImage} alt="after" className="compare-img" />
+                                    <ReactCompareSliderImage src={currentImage || project?.renderedImage || ''} alt="after" className="compare-img" />
                                 }
                             />
                         ) : (

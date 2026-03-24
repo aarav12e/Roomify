@@ -20,10 +20,10 @@ export default function Home() {
     const isCreatingProjectRef = useRef(false);
 
     const handleUploadComplete = async (base64Image: string) => {
-        try {
+        if(isCreatingProjectRef.current) return false;
+        isCreatingProjectRef.current = true;
 
-            if(isCreatingProjectRef.current) return false;
-            isCreatingProjectRef.current = true;
+        try {
             const newId = Date.now().toString();
             const name = `Residence ${newId}`;
 
@@ -33,19 +33,21 @@ export default function Home() {
                 timestamp: Date.now()
             }
 
-            const saved = await createProject({ item: newItem, visibility: 'private' });
+            // Best-effort save — if it fails we still navigate with the image in state
+            const saved = await createProject({ item: newItem, visibility: 'private' }).catch((e) => {
+                console.warn('createProject threw:', e);
+                return null;
+            });
 
-            if(!saved) {
-                console.error("Failed to create project");
-                return false;
+            if (saved) {
+                setProjects((prev) => [saved, ...prev]);
             }
 
-            setProjects((prev) => [saved, ...prev]);
-
+            // Always navigate — visualizer falls back to stateImage if saved is null
             navigate(`/visualizer/${newId}`, {
                 state: {
-                    initialImage: saved.sourceImage,
-                    initialRendered: saved.renderedImage || null,
+                    initialImage: saved?.sourceImage ?? base64Image,
+                    initialRendered: saved?.renderedImage ?? null,
                     name
                 }
             });
