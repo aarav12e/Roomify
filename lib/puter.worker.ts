@@ -1,63 +1,90 @@
-import puter from "@heyputer/puter.js";
-import {
-    createHostingSlug,
-    fetchBlobFromUrl, getHostedUrl,
-    getImageExtension,
-    HOSTING_CONFIG_KEY,
-    imageUrlToPngBlob,
-    isHostedUrl
-} from "./utils";
+const PROJECT_PREFIX = 'roomify_project_';
 
-export const getOrCreateHostingConfig = async (): Promise<HostingConfig | null> => {
-    const existing = (await puter.kv.get(HOSTING_CONFIG_KEY)) as HostingConfig | null;
+const jsonError = (status, message, extra = {}) => {
+    return new Response(JSON.stringify({  error: message, ...extra }), {
+        status,
+        headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+        }
+    })
+}
 
-    if(existing?.subdomain) return { subdomain: existing.subdomain };
-
-    const subdomain = createHostingSlug();
-
+const getUserId = async (userPuter) => {
     try {
-        const created = await puter.hosting.create(subdomain, '.');
+        const user = await userPuter.auth.getUser();
 
-        const record = { subdomain: created.subdomain };
-
-        await puter.kv.set(HOSTING_CONFIG_KEY, record);
-
-        return record;
-    } catch (e) {
-        console.warn(`Could not find subdomain: ${e}`);
+        return user?.uuid || null;
+    } catch {
         return null;
     }
 }
 
-export const uploadImageToHosting = async ({ hosting, url, projectId, label }: StoreHostedImageParams): Promise<HostedAsset | null> => {
-    if(!hosting || !url) return null;
-    if(isHostedUrl(url)) return { url };
-
+router.post('/api/projects/save', async ({ request, user }) => {
     try {
-        const resolved = label === "rendered"
-            ? await imageUrlToPngBlob(url)
-                .then((blob) => blob ? { blob, contentType: 'image/png' }: null)
-            : await fetchBlobFromUrl(url);
+        const userPuter = user.puter;
 
-        if(!resolved) return null;
+        if(!userPuter) return jsonError(401, 'Authentication failed');
 
-        const contentType = resolved.contentType || resolved.blob.type || '';
-        const ext = getImageExtension(contentType, url);
-        const dir = `projects/${projectId}`;
-        const filePath = `${dir}/${label}.${ext}`;
+        const body = await request.json();
+        const project = body?.project;
 
-        const uploadFile = new File([resolved.blob], `${label}.${ext}`, {
-            type: contentType,
-        });
+        if(!project?.id || !project?.sourceImage) return jsonError(400, 'Project ID and source image are required');
 
-        await puter.fs.mkdir(dir, { createMissingParents: true });
-        await puter.fs.write(filePath, uploadFile);
+        const payload = {
+            ...project,
+            updatedAt: new Date().toISOString(),
+        }
 
-        const hostedUrl = getHostedUrl({ subdomain: hosting.subdomain }, filePath);
+        const userId = await getUserId(userPuter);
+        if(!userId) return jsonError(401, 'Authentication failed');
 
-        return hostedUrl ? { url: hostedUrl } : null;
+        const key = `${PROJECT_PREFIX}${project.id}`;
+        await userPuter.kv.set(key, payload);
+
+        return { saved: true, id: project.id, project: payload }
     } catch (e) {
-        console.warn(`Failed to store hosted image: ${e}`);
-        return null;
+        return jsonError(500, 'Failed to save project', { message: e.message || 'Unknown error' });
     }
-}
+})
+
+router.get('/api/projects/list', async ({ user }) => {
+    try {
+        const userPuter = user.puter;
+        if (!userPuter) return jsonError(401, 'Authentication failed');
+
+        const userId = await getUserId(userPuter);
+        if (!userId) return jsonError(401, 'Authentication failed');
+
+        const projects = (await userPuter.kv.list(PROJECT_PREFIX, true))
+            .map(({value}) => ({ ...value, isPublic: true }))
+
+        return { projects };
+    } catch (e) {
+        return jsonError(500, 'Failed to list projects', { message: e.message || 'Unknown error' });
+    }
+})
+
+router.get('/api/projects/get', async ({ request, user }) => {
+    try {
+        const userPuter = user.puter;
+        if (!userPuter) return jsonError(401, 'Authentication failed');
+
+        const userId = await getUserId(userPuter);
+        if (!userId) return jsonError(401, 'Authentication failed');
+
+        const url = new URL(request.url);
+        const id = url.searchParams.get('id');
+
+        if (!id) return jsonError(400, 'Project ID is required');
+
+        const key = `${PROJECT_PREFIX}${id}`;
+        const project = await userPuter.kv.get(key);
+
+        if (!project) return jsonError(404, 'Project not found');
+
+        return { project };
+    } catch (e) {
+        return jsonError(500, 'Failed to get project', { message: e.message || 'Unknown error' });
+    }
+})
